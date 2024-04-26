@@ -58,6 +58,7 @@ critic_optimizer = torch.optim.Adam(critic.parameters(), lr=lr_critic)
 
 #
 episode_returns = [[] for _ in range(K)]
+# [[r r r], [r,r,,r], [r,r,r]]
 episode_count = 0
 
 # Training loop
@@ -66,12 +67,11 @@ step = 0
 #start_state, _ = env.reset()
 worker_state = [worker_env.reset()[0] for worker_env in worker_envs]
 rewards = np.zeros(K)
-
 while step < max_steps:
     advantages = []
-    states = []
-    actions = []
+    returns = []
     log_probs = torch.zeros(K)
+
     for i in range(K):
         state = worker_state[i]
         action_prob = actor(torch.tensor(state))
@@ -79,29 +79,29 @@ while step < max_steps:
         log_probs[i] = torch.log(action_prob[action])
         next_state, reward, terminated, truncated, _ = worker_envs[i].step(action)
         done = terminated or truncated
-        rewards[i] = rewards[i] + reward
-        
-        R = reward + gamma * (1-done)*critic(torch.tensor(next_state)).item()
-        advantage = R - critic(torch.tensor(state)).item()
-        worker_state[i] = next_state
-        states.append(state)
-        actions.append(action)
-        advantages.append(advantage)
 
         if done:
             episode_returns[i].append(rewards[i])
             rewards[i] = 0
             state, _ = worker_envs[i].reset()
             worker_state[i] = state
+        else:
+            rewards[i] = rewards[i] + reward
+
+        returns.append(reward + gamma * (1 - done) * critic(torch.tensor(next_state)).item())
+        worker_state[i] = next_state
+
+    # Calculate advantages
+    advantages = torch.tensor(returns) - critic(torch.tensor(worker_state))
 
     # Update the actor
-    actor_loss = torch.sum(log_probs * torch.tensor(advantages))
+    actor_loss = -torch.mean(log_probs * advantages.detach())
     actor_optimizer.zero_grad()
     actor_loss.backward()
     actor_optimizer.step()
 
-    #Update the critic
-    critic_loss = torch.sum(torch.tensor(advantages, requires_grad=True)**2)
+    # Update the critic
+    critic_loss = nn.MSELoss()(critic(torch.tensor(worker_state)), torch.tensor(returns))
     critic_optimizer.zero_grad()
     critic_loss.backward()
     critic_optimizer.step()
@@ -113,6 +113,7 @@ while step < max_steps:
         print(f"Step {step}: Average episodic return = {avg_return:.2f}")
         print(f"Step {step}: Critic loss = {critic_loss.item():.4f}")
         print(f"Step {step}: Actor loss = {actor_loss.item():.4f}")
+        episode_returns = [[] for _ in range(K)]
         # Log other metrics like entropy, grad norms, etc.
         #episode_returns = [[] for _ in range(K)]
         #episode_count = 0
