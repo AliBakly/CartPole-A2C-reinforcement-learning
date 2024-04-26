@@ -41,7 +41,7 @@ K = 1
 n = 1
 
 log_interval = 1000
-eval_interval = 20000
+eval_interval = 5000
 num_eval_episodes = 10
 # Create enviroment
 worker_envs = [gym.make('CartPole-v1') for _ in range(K)]
@@ -62,12 +62,20 @@ episode_returns = [[] for _ in range(K)]
 episode_count = 0
 
 # Training loop
-max_steps = 500000
+max_steps = 30000
 step = 0
 #start_state, _ = env.reset()
 worker_state = [worker_env.reset()[0] for worker_env in worker_envs]
 rewards = np.zeros(K)
-while step < max_steps:
+
+train_return_history = []
+eval_return_history = []
+
+train_loss_actor_history = []
+train_loss_critic_history = []
+value_trajectories = []
+
+while step <= max_steps:
     advantages = []
     returns = []
     log_probs = torch.zeros(K)
@@ -79,65 +87,144 @@ while step < max_steps:
         log_probs[i] = torch.log(action_prob[action])
         next_state, reward, terminated, truncated, _ = worker_envs[i].step(action)
         done = terminated or truncated
+        rewards[i] = rewards[i] + reward
 
         if done:
             episode_returns[i].append(rewards[i])
             rewards[i] = 0
             state, _ = worker_envs[i].reset()
             worker_state[i] = state
-        else:
-            rewards[i] = rewards[i] + reward
 
-        returns.append(reward + gamma * (1 - done) * critic(torch.tensor(next_state)).item())
+        returns.append(reward + gamma * (1 - terminated) * critic(torch.tensor(next_state)).item())
         worker_state[i] = next_state
 
     # Calculate advantages
-    advantages = torch.tensor(returns) - critic(torch.tensor(worker_state))
+    advantages = torch.tensor(returns) - critic(torch.tensor(worker_state)).squeeze(-1)
 
     # Update the actor
-    actor_loss = -torch.mean(log_probs * advantages.detach())
+    actor_loss = torch.mean(log_probs * advantages.detach())
     actor_optimizer.zero_grad()
     actor_loss.backward()
     actor_optimizer.step()
 
     # Update the critic
-    critic_loss = nn.MSELoss()(critic(torch.tensor(worker_state)), torch.tensor(returns))
+    critic_loss = nn.MSELoss()(critic(torch.tensor(worker_state)).squeeze(-1), torch.tensor(returns))
     critic_optimizer.zero_grad()
     critic_loss.backward()
     critic_optimizer.step()
 
     # Logging
-    if step % log_interval == 0:
+    if step % (log_interval*K) == 0:
         avg_returns = [np.mean(returns) for returns in episode_returns]
         avg_return = np.mean(avg_returns)
+        
+        train_return_history.append(avg_return)
+        train_loss_actor_history.append(actor_loss.item())
+        train_loss_critic_history.append(critic_loss.item())
+        
         print(f"Step {step}: Average episodic return = {avg_return:.2f}")
         print(f"Step {step}: Critic loss = {critic_loss.item():.4f}")
         print(f"Step {step}: Actor loss = {actor_loss.item():.4f}")
         episode_returns = [[] for _ in range(K)]
-        # Log other metrics like entropy, grad norms, etc.
-        #episode_returns = [[] for _ in range(K)]
-        #episode_count = 0
+        
+
 
     # Evaluation
-    if step % eval_interval == 0:
+    if step % (eval_interval*K) == 0:
         eval_env = gym.make('CartPole-v1')  # Create a new environment for evaluation
         eval_returns = []
-        for _ in range(num_eval_episodes):
+        
+        trajectory_states = []
+        trajectory_values = []
+        for i in range(num_eval_episodes):
             state, _ = eval_env.reset()
             done = False
             episode_return = 0
+            
+            
             while not done:
                 action_prob = actor(torch.tensor(state))
                 action = torch.argmax(action_prob).item()
                 state, reward, terminated, truncated, _ = eval_env.step(action)
+                
                 episode_return += reward
                 done = terminated or truncated
+                
+                if i == 0:
+                    trajectory_states.append(state)
+                    value = critic(torch.tensor(state)).item()
+                    trajectory_values.append(value)
+                    
+
+                
             eval_returns.append(episode_return)
+
+        plt.figure(figsize=(10, 5))
+        plt.plot(range(len(trajectory_states)), trajectory_values)
+        plt.xlabel('Time Step')
+        plt.ylabel('Value Function')
+        plt.title('Value Function on Sampled Trajectory')
+        plt.show()
+        
+        value_trajectories.append(trajectory_values)
         avg_eval_return = np.mean(eval_returns)
+        eval_return_history.append(avg_eval_return)
+        
         print(f"Step {step}: Average evaluation return = {avg_eval_return:.2f}")
 
 
-    step += 1
+    step += K
+
+
+plt.figure(figsize=(10, 5))
+plt.plot(range(len(train_return_history)), train_return_history)
+plt.xlabel('Time Step')
+plt.ylabel('Average Return')
+plt.title('Return during Training')
+plt.show()
+
+plt.figure(figsize=(10, 5))
+plt.plot(range(len(eval_return_history)), eval_return_history)
+plt.xlabel('Time Step')
+plt.ylabel('Average Return')
+plt.title('Return during Evauluation')
+plt.show()
+
+plt.figure(figsize=(10, 5))
+plt.plot(range(len(train_loss_critic_history)), train_loss_critic_history)
+plt.xlabel('Time Step')
+plt.ylabel('Loss')
+plt.title('Loss of Critic during Training')
+plt.show()
+
+plt.figure(figsize=(10, 5))
+plt.plot(range(len(train_loss_actor_history)), train_loss_actor_history)
+plt.xlabel('Time Step')
+plt.ylabel('Loss')
+plt.title('Loss of Actor during Training')
+plt.show()
+
+max_length = max(len(lst) for lst in value_trajectories)
+
+padded_trajectories = []
+for lst in value_trajectories:
+    padded_lst = lst + [lst[-1]] * (max_length - len(lst))
+    padded_trajectories.append(padded_lst)
+
+means = np.mean(padded_trajectories, axis=0)
+
+for i, lst in enumerate(value_trajectories):
+    plt.plot(range(len(lst)), lst, color='blue', alpha=0.1)
+
+plt.plot(range(len(means)), means, color='red', label='Mean Value Function')
+plt.xlabel('Time Step')
+plt.ylabel('Value Function')
+plt.title('Value Function on Sampled Trajectories')
+plt.legend()
+plt.show()
+
+
+
 
 # Close the worker environments
 for env in worker_envs:
