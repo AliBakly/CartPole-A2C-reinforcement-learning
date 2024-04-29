@@ -75,13 +75,15 @@ train_loss_actor_history = []
 train_loss_critic_history = []
 value_trajectories = []
 
+prob_mask = 0.1
 while step <= max_steps:
     advantages = []
     returns = []
     log_probs = torch.zeros(K)
-
+    K_states = []
     for i in range(K):
         state = worker_state[i]
+        K_states.append(state)
         action_prob = actor(torch.tensor(state))
         action = torch.multinomial(action_prob, 1).item()
         log_probs[i] = torch.log(action_prob[action])
@@ -95,20 +97,21 @@ while step <= max_steps:
             state, _ = worker_envs[i].reset()
             worker_state[i] = state
 
-        returns.append(reward + gamma * (1 - terminated) * critic(torch.tensor(next_state)).item())
+        mask = np.random.binomial(1, prob_mask)
+        returns.append(reward*mask + gamma * (1 - terminated) * critic(torch.tensor(next_state)).item())
         worker_state[i] = next_state
 
     # Calculate advantages
-    advantages = torch.tensor(returns) - critic(torch.tensor(worker_state)).squeeze(-1)
+    advantages = torch.tensor(returns) - critic(torch.tensor(K_states)).squeeze(-1)
 
     # Update the actor
-    actor_loss = torch.mean(log_probs * advantages.detach())
+    actor_loss = -torch.mean(log_probs * advantages.detach())
     actor_optimizer.zero_grad()
     actor_loss.backward()
     actor_optimizer.step()
 
     # Update the critic
-    critic_loss = nn.MSELoss()(critic(torch.tensor(worker_state)).squeeze(-1), torch.tensor(returns))
+    critic_loss = nn.MSELoss()(critic(torch.tensor(K_states)).squeeze(-1), torch.tensor(returns))
     critic_optimizer.zero_grad()
     critic_loss.backward()
     critic_optimizer.step()
@@ -172,7 +175,6 @@ while step <= max_steps:
         
         print(f"Step {step}: Average evaluation return = {avg_eval_return:.2f}")
 
-
     step += K
 
 
@@ -229,3 +231,5 @@ plt.show()
 # Close the worker environments
 for env in worker_envs:
     env.close()
+    
+#r_t + gamma*r_{t+1} + gamma^2 *r_{t+2}v +...+ gamma^{n-1} * r_{t+n-1} + gamma^n * V(s_{t+n})
