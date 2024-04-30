@@ -37,7 +37,7 @@ class Critic(nn.Module):
 lr_actor = 1e-5
 lr_critic = 1e-3
 gamma = 0.99
-K = 6
+K = 1
 n = 1
 
 log_interval = (1000// (K*n)) * K*n#1000
@@ -78,15 +78,16 @@ value_trajectories = []
 prob_mask = 0.1
 while step <= max_steps:
     advantages = []
-    returns = [[] for _ in range(K)]
+    returns = [[] for _ in range(K)] #[[ 1 2 3], [1 2 3 4 5]]
     k_n_states = [[] for _ in range(K)]
     k_n_rewards = [[] for _ in range(K)]
     log_probs =  [[] for _ in range(K)]#torch.zeros(K)
-    
+    last_K_state = [None for _ in range(K)]
+    dones = [False for _ in range(K)]
     for i in range(K):
         for j in range(n):
             state = worker_state[i]
-            k_n_states[i].append(state)
+            k_n_states[i].append(state) #[[.....]]
             
             action_prob = actor(torch.tensor(state))
             action = torch.multinomial(action_prob, 1).item()
@@ -97,6 +98,8 @@ while step <= max_steps:
             mask = np.random.binomial(1, prob_mask)
             k_n_rewards[i].append(reward*mask)
             worker_state[i] = next_state
+            last_K_state[i] = next_state
+            dones[i] = terminated
             if done:
                 episode_returns[i].append(rewards[i])
                 rewards[i] = 0
@@ -107,15 +110,27 @@ while step <= max_steps:
             
     for i in range(K):
         discounting = []
-        N = len(k_n_states[i])
+        N = len(k_n_states[i]) # [[s1, s2], [s1, s2, s3, s4, s5]]
         for j in range(N):
-            discounting = [gamma** i for i in range(N - j)]
-            returns[i].append(np.dot(discounting, k_n_rewards[i][j:]) + gamma**(N-j) * critic(torch.tensor(worker_state[i])).item())
-    
+            discounting = [gamma** power for power in range(N - j)] # [gamma^0, gamma^1, gamma^2, gamma^3]
+            returns[i].append(np.dot(discounting, k_n_rewards[i][j:]) + (1-dones[i])*gamma**(N-j) * critic(torch.tensor(last_K_state[i])).item())
+            
+            #discounting = [gamma** power for power in range(N - j)] # [gamma^0, gamma^1, gamma^2, gamma^3]
+            #returns[i].append(np.dot(discounting, k_n_rewards[i][:N-j]) + gamma**(N-j) * critic(torch.tensor(last_K_state[i])).item())
+            # if K=N=1, discounting = [1],
+            # k_n_rewards[j:] = [r_t]
+            
+            # r_t +gamma *critic(s_t+1)
+            # discounting = [gamma^0, gamma^1, gamma^2, ...gamma^(N-1)]	 ]
+            # k_n_rewards[0][0:] = [r_0, r_1, r_2, ... r_(N-1)]
+            
+    # K_n states= [[s1, s2], [s1, s2, s3, s4, s5]]
+    # Log_probs = [[log_prob_1, log_prob_2], [log_prob_1, log_prob_2, log_prob_3, log_prob_4, log_prob_5]]
     k_n_states_flat = [state for worker_states in k_n_states for state in worker_states]
     returns_flat = [ret for worker_returns in returns for ret in worker_returns]
     log_probs_flat = [prob for worker_probs in log_probs for prob in worker_probs]
 
+    
     advantages = torch.tensor(returns_flat).float() - critic(torch.tensor(k_n_states_flat).float()).squeeze(-1)
     actor_loss = -torch.mean(torch.stack(log_probs_flat).float() * advantages.clone().detach())
     actor_optimizer.zero_grad()
