@@ -37,11 +37,11 @@ class Critic(nn.Module):
 lr_actor = 1e-5
 lr_critic = 1e-3
 gamma = 0.99
-K = 1
+K = 6
 n = 1
 
-log_interval = 1000
-eval_interval = 5000
+log_interval = (1000// (K*n)) * K*n#1000
+eval_interval = (20000// (K*n)) * K*n#5000
 num_eval_episodes = 10
 # Create enviroment
 worker_envs = [gym.make('CartPole-v1') for _ in range(K)]
@@ -91,15 +91,15 @@ while step <= max_steps:
         done = terminated or truncated
         rewards[i] = rewards[i] + reward
 
+        mask = np.random.binomial(1, prob_mask)
+        returns.append(reward*mask + gamma * (1 - terminated) * critic(torch.tensor(next_state)).item())
+        worker_state[i] = next_state
         if done:
             episode_returns[i].append(rewards[i])
             rewards[i] = 0
             state, _ = worker_envs[i].reset()
             worker_state[i] = state
-
-        mask = np.random.binomial(1, prob_mask)
-        returns.append(reward*mask + gamma * (1 - terminated) * critic(torch.tensor(next_state)).item())
-        worker_state[i] = next_state
+        
 
     # Calculate advantages
     advantages = torch.tensor(returns) - critic(torch.tensor(K_states)).squeeze(-1)
@@ -117,7 +117,7 @@ while step <= max_steps:
     critic_optimizer.step()
 
     # Logging
-    if step % (log_interval*K) == 0:
+    if step % log_interval == 0:
         avg_returns = [np.mean(returns) for returns in episode_returns]
         avg_return = np.mean(avg_returns)
         
@@ -133,7 +133,7 @@ while step <= max_steps:
 
 
     # Evaluation
-    if step % (eval_interval*K) == 0:
+    if step % eval_interval == 0:
         eval_env = gym.make('CartPole-v1')  # Create a new environment for evaluation
         eval_returns = []
         
