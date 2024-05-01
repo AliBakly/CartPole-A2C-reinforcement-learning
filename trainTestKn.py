@@ -37,8 +37,8 @@ class Critic(nn.Module):
 lr_actor = 1e-5
 lr_critic = 1e-3
 gamma = 0.99
-K = 1
-n = 1
+K = 6
+n = 6
 
 log_interval = (1000// (K*n)) * K*n#1000
 eval_interval = (20000// (K*n)) * K*n#5000
@@ -144,7 +144,7 @@ while step <= max_steps:
 
     # Logging
     if step % (log_interval) == 0:
-        avg_returns = [np.mean(returns) for returns in episode_returns]
+        avg_returns = [np.mean(returns) for returns in episode_returns if len(returns) > 0]
         avg_return = np.mean(avg_returns)
         
         train_return_history.append(avg_return)
@@ -174,6 +174,7 @@ while step <= max_steps:
             while not done:
                 action_prob = actor(torch.tensor(state))
                 action = torch.argmax(action_prob).item()
+                print(action)
                 state, reward, terminated, truncated, _ = eval_env.step(action)
                 
                 episode_return += reward
