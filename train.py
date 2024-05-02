@@ -3,6 +3,8 @@ import torch.nn as nn
 import gymnasium as gym
 import numpy as np
 import matplotlib.pyplot as plt
+from gymnasium.wrappers import RecordVideo
+
 class Actor(nn.Module):
     def __init__(self, input_size, output_size, hidden_size=64, continous = False):
         super(Actor, self).__init__()
@@ -44,7 +46,6 @@ def env_step(k_n_states, k_n_rewards, log_probs, last_K_state, dones, actor, rew
     state = worker_state[i]
     k_n_states[i].append(state) 
     if continous:
-        k_n_states[i].append(state) #[[.....]]
         mean, log_std = actor(torch.tensor(state, dtype=torch.float32))
 
         std = torch.exp(log_std)
@@ -147,7 +148,7 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
             N = len(k_n_states[i]) # [[s1, s2], [s1, s2, s3, s4, s5]]
             for j in range(N):
                 discounting = [gamma** power for power in range(N - j)] # [gamma^0, gamma^1, gamma^2, gamma^3]
-                returns[i].append(np.dot(discounting, k_n_rewards[i][j:]) + (1-dones[i])*gamma**(N-j) * critic(torch.tensor(last_K_state[i], dtype=torch.float32))).item()
+                returns[i].append(np.dot(discounting, k_n_rewards[i][j:]) + (1-dones[i])*gamma**(N-j) * critic(torch.tensor(last_K_state[i], dtype=torch.float32)).item())
 
         k_n_states_flat = [state for worker_states in k_n_states for state in worker_states]
         returns_flat = [ret for worker_returns in returns for ret in worker_returns]
@@ -178,7 +179,8 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
 
         # Evaluation
         if step % (eval_interval) == 0:
-            eval_env = gym.make(env_name)  # Create a new environment for evaluation
+            eval_env = gym.make(env_name, render_mode = "rgb_array")  # Create a new environment for evaluation
+            env = RecordVideo(eval_env, "./mp4") 
             eval_returns = []
             
             trajectory_states = []
@@ -198,6 +200,8 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
                     
                     state, reward, terminated, truncated, _ = eval_env.step(action)
                     episode_return += reward
+                    
+                    eval_env.render()
                     done = terminated or truncated
                     
                     if i == 0:
@@ -250,4 +254,3 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
 
 ### Testing
         
-train(lr_actor=3e-4, lr_critic=1e-3, gamma=0.99, K=6, n=6, env_name='InvertedPendulum-v4', continous=True, log_interval=1000, eval_interval=20000, num_eval_episodes=10, max_steps=500000, prob_mask=0.1)
