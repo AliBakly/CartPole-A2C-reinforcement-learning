@@ -190,7 +190,7 @@ while step <= max_steps:
             eval_returns.append(episode_return)
 
         plt.figure(figsize=(10, 5))
-        plt.plot(range(len(trajectory_states)), trajectory_values)
+        plt.plot(range(len(trajectory_values)), trajectory_values)
         plt.xlabel('Time Step')
         plt.ylabel('Value Function')
         plt.title('Value Function on Sampled Trajectory')

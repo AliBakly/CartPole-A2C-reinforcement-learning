@@ -12,6 +12,7 @@ class Actor(nn.Module):
         self.fc2 = nn.Linear(hidden_size, hidden_size)
         self.fc_mean = nn.Linear(hidden_size, output_size)
         self.fc_log_std = nn.Parameter(torch.zeros(output_size))
+        
         self.activation = nn.Tanh() # torch.tanh alternativt
 
     def forward(self, x):
@@ -21,6 +22,9 @@ class Actor(nn.Module):
 
         log_std = self.fc_log_std
         return mean, log_std
+
+
+    
 
 class Critic(nn.Module):
     def __init__(self, input_size, hidden_size=64):
@@ -93,6 +97,7 @@ while step <= max_steps:
             state = worker_state[i]
             k_n_states[i].append(state) #[[.....]]
             mean, log_std = actor(torch.tensor(state, dtype=torch.float32))
+           
             std = torch.exp(log_std)
             dist = torch.distributions.Normal(mean, std)
             action = dist.sample()
@@ -179,10 +184,9 @@ while step <= max_steps:
             
             while not done:
                 mean, log_std = actor(torch.tensor(state, dtype=torch.float32))
-                std = torch.exp(log_std)
-                dist = torch.distributions.Normal(mean, std)
-                action = dist.sample()
-                action = torch.clamp(action, -3, 3)
+                
+                action = torch.clamp(mean.detach(), -3, 3) # instead of sampling from the distribution, we use the mean for the action 
+                
                 state, reward, terminated, truncated, _ = eval_env.step(action)
                 
                 episode_return += reward
@@ -192,9 +196,7 @@ while step <= max_steps:
                     trajectory_states.append(state)
                     value = critic(torch.tensor(state, dtype=torch.float32)).item()
                     trajectory_values.append(value)
-                    
 
-                
             eval_returns.append(episode_return)
 
         plt.figure(figsize=(10, 5))

@@ -37,7 +37,7 @@ class Critic(nn.Module):
 lr_actor = 1e-5
 lr_critic = 1e-3
 gamma = 0.99
-K = 6
+K = 1
 n = 1
 
 log_interval = (1000// (K*n)) * K*n#1000
@@ -62,7 +62,7 @@ episode_returns = [[] for _ in range(K)]
 episode_count = 0
 
 # Training loop
-max_steps = 30000
+max_steps = 100000
 step = 0
 #start_state, _ = env.reset()
 worker_state = [worker_env.reset()[0] for worker_env in worker_envs]
@@ -105,7 +105,7 @@ while step <= max_steps:
     advantages = torch.tensor(returns) - critic(torch.tensor(K_states)).squeeze(-1)
 
     # Update the actor
-    actor_loss = -torch.mean(log_probs * advantages.detach())
+    actor_loss = -torch.sum(log_probs * advantages.detach())
     actor_optimizer.zero_grad()
     actor_loss.backward()
     actor_optimizer.step()
@@ -233,3 +233,4 @@ for env in worker_envs:
     env.close()
     
 #r_t + gamma*r_{t+1} + gamma^2 *r_{t+2}v +...+ gamma^{n-1} * r_{t+n-1} + gamma^n * V(s_{t+n})
+#r_{t+1} + gamma *r_{t+2}v +...+ gamma^{n-2} * r_{t+n-2} + gamma^(n-1 * V(s_{t+n})
