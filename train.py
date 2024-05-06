@@ -83,8 +83,13 @@ def plot_result(return_history, xlabel, ylabel, title):
 
     plt.figure(figsize=(10, 5))
     if type(return_history[0]) == list:
-        for returns in return_history:
-            plt.plot(range(len(returns)), returns)
+        returns_array = np.array(return_history)
+        mean_returns = np.mean(returns_array, axis=0)
+        min_returns = np.min(returns_array, axis=0)
+        max_returns = np.max(returns_array, axis=0)
+        
+        plt.plot(range(len(mean_returns)), mean_returns, label='Mean')
+        plt.fill_between(range(len(mean_returns)), min_returns, max_returns, alpha=0.2)
     else:
         plt.plot(range(len(return_history)), return_history)
         
