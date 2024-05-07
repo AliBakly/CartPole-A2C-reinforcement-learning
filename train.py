@@ -83,15 +83,22 @@ def plot_result(return_history, xlabel, ylabel, title):
 
     plt.figure(figsize=(10, 5))
     if type(return_history[0]) == list:
-        returns_array = np.array(return_history)
-        mean_returns = np.mean(returns_array, axis=0)
-        min_returns = np.min(returns_array, axis=0)
-        max_returns = np.max(returns_array, axis=0)
+        mean_returns = avg_log(return_history)
         
+        longest_list = max(return_history, key=len)    
+        for i, x in enumerate(return_history):
+            return_history[i] = x + longest_list[len(x):]
+            
+        min_returns = np.min(np.array(return_history), axis=0)
+        max_returns = np.max(np.array(return_history), axis=0)
+
         plt.plot(range(len(mean_returns)), mean_returns, label='Mean')
         plt.fill_between(range(len(mean_returns)), min_returns, max_returns, alpha=0.2)
     else:
+        min_returns = min(return_history)
+        max_returns = max(return_history)
         plt.plot(range(len(return_history)), return_history)
+        plt.ylim(min_returns - 10, max_returns + 10)
         
     plt.xlabel(xlabel)
     plt.ylabel(ylabel)
@@ -104,6 +111,7 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
     eval_return_history_all = []
     train_loss_actor_history_all = []
     train_loss_critic_history_all = []
+    value_trajectories_all = []
         
     for seed in seeds:
         torch.manual_seed(seed)
@@ -179,16 +187,17 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
             
             update_params(actor_optimizer, actor_loss)
             update_params(critic_optimizer, critic_loss)
-
+            #[idx, y]
+            # episode, y1 y2 y
             # Logging
             if step % (log_interval) == 0 and step > 0:
                 avg_returns = [np.mean(returns) for returns in episode_returns if len(returns) > 0]
+                train_loss_actor_history.append(actor_loss.item())
+                train_loss_critic_history.append(critic_loss.item())
                 if avg_returns:
                     avg_return = np.mean(avg_returns)
-                    
-                    train_return_history.append(avg_return)
-                    train_loss_actor_history.append(actor_loss.item())
-                    train_loss_critic_history.append(critic_loss.item())
+                    train_return_history.extend(avg_log(episode_returns))
+
                     
                     print(f"Step {step}: Average episodic return = {avg_return:.2f}")
                     print(f"Step {step}: Critic loss = {critic_loss.item():.4f}")
@@ -237,7 +246,7 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
                 
                 plot_result(trajectory_values, 'Time Step', 'Value Function', 'Value Function on Sampled Trajectory')
                 
-                value_trajectories.append(trajectory_values)
+                value_trajectories.append(np.mean(trajectory_values))
                 avg_eval_return = np.mean(eval_returns)
                 eval_return_history.append(avg_eval_return)
                 
@@ -245,40 +254,30 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
 
             step += K*n
 
-
+        value_trajectories_all.append(value_trajectories)
         train_return_history_all.append(train_return_history)
         eval_return_history_all.append(eval_return_history)
         train_loss_actor_history_all.append(train_loss_actor_history)
         train_loss_critic_history_all.append(train_loss_critic_history)    
 
-        # DO THIS OUTSSIDE OF THE SEED LOOP???
-        max_length = max(len(lst) for lst in value_trajectories)
-
-        padded_trajectories = []
-        for lst in value_trajectories:
-            padded_lst = lst + [lst[-1]] * (max_length - len(lst))
-            padded_trajectories.append(padded_lst)
-
-        means = np.mean(padded_trajectories, axis=0)
-
-        for i, lst in enumerate(value_trajectories):
-            plt.plot(range(len(lst)), lst, color='blue', alpha=0.1)
-
-        plt.plot(range(len(means)), means, color='red', label='Mean Value Function')
-        plt.xlabel('Time Step')
-        plt.ylabel('Value Function')
-        plt.title('Value Function on Sampled Trajectories')
-        plt.legend()
-        plt.show()
-
         # Close the worker environments
         for env in worker_envs:
             env.close()
             
+    plot_result(value_trajectories_all, 'Time Step', 'Mean value', 'Mean over value function trajectories')
     plot_result(train_return_history_all, 'Time Step', 'Average Return', 'Return during Training')
     plot_result(eval_return_history_all, 'Time Step', 'Average Return', 'Return during Evaluation')
     plot_result(train_loss_critic_history_all, 'Time Step', 'Loss', 'Loss of Critic during Training')
     plot_result(train_loss_actor_history_all, 'Time Step', 'Loss', 'Loss of Actor during Training')
 
 ### Testing
-        
+
+def avg_log(arr): # arr = [[x11 x12 x13 x14], [x21 x22], [x31 x32 x33 ]...]
+    max_len = max(len(lst) for lst in arr)
+    avg_list = []
+    for i in range(max_len):
+        col = [lst[i] for lst in arr if i < len(lst)]
+        avg_list.append(sum(col) / len(col))
+    return avg_list
+
+# [m1 m2 m3 m4]    m
