@@ -42,11 +42,12 @@ class Critic(nn.Module):
         x = self.fc3(x)
         return x
 
-def env_step(k_n_states, k_n_rewards, log_probs, last_K_state, dones, actor, rewards, worker_state, worker_envs, i, prob_mask, episode_returns, continous=False):
+def env_step(k_n_states, k_n_rewards, log_probs, last_K_state, dones, actor, rewards, worker_state,
+             worker_envs, i, prob_mask, episode_returns, continous=False, device = "cpu"):
     state = worker_state[i]
     k_n_states[i].append(state) 
     if continous:
-        mean, log_std = actor(torch.tensor(state, dtype=torch.float32))
+        mean, log_std = actor(torch.tensor(state, dtype=torch.float32).to(device))
 
         std = torch.exp(log_std)
         dist = torch.distributions.Normal(mean, std)
@@ -54,7 +55,7 @@ def env_step(k_n_states, k_n_rewards, log_probs, last_K_state, dones, actor, rew
         log_probs[i].append(dist.log_prob(action))
         action = torch.clamp(action, -3, 3)
     else:
-        action_prob = actor(torch.tensor(state))
+        action_prob = actor(torch.tensor(state).to(device))
         action = torch.multinomial(action_prob, 1).item()
         log_probs[i].append(torch.log(action_prob[action]))
         
@@ -79,9 +80,9 @@ def update_params(optimizer, loss):
         loss.backward()
         optimizer.step()
         
-def plot_result(return_history, xlabel, ylabel, title):
+def plot_result(return_history, xlabel, ylabel, title, range_step = 1):
 
-    plt.figure(figsize=(10, 5))
+    plt.figure(figsize=(8, 6))
     if type(return_history[0]) == list:
         mean_returns = avg_log(return_history)
         
@@ -92,12 +93,14 @@ def plot_result(return_history, xlabel, ylabel, title):
         min_returns = np.min(np.array(return_history), axis=0)
         max_returns = np.max(np.array(return_history), axis=0)
 
-        plt.plot(range(len(mean_returns)), mean_returns, label='Mean')
-        plt.fill_between(range(len(mean_returns)), min_returns, max_returns, alpha=0.2)
+        plt.plot(range(range_step,range_step*len(mean_returns) + range_step, range_step), mean_returns, label='Mean')
+
+        plt.fill_between(range(range_step,range_step*len(mean_returns) + range_step, range_step), min_returns, max_returns, alpha=0.2, label='Min/Max')
+        plt.legend()
     else:
         min_returns = min(return_history)
         max_returns = max(return_history)
-        plt.plot(range(len(return_history)), return_history)
+        plt.plot(range(range_step,range_step*len(return_history) + range_step, range_step), return_history)
         plt.ylim(min_returns - 10, max_returns + 10)
         
     plt.xlabel(xlabel)
@@ -106,7 +109,8 @@ def plot_result(return_history, xlabel, ylabel, title):
     plt.show()
 
 # Set hyperparameters
-def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, eval_interval, num_eval_episodes, max_steps, prob_mask, seeds = [69], record_video = False):
+def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, eval_interval,
+          num_eval_episodes, max_steps, prob_mask, device = "cpu", seeds = [69], record_video = None):
     train_return_history_all = []
     eval_return_history_all = []
     train_loss_actor_history_all = []
@@ -129,8 +133,8 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
             output_size = worker_envs[0].action_space.n
 
         # Create actor and critic
-        actor = Actor(input_size, output_size, continous=continous)
-        critic = Critic(input_size)
+        actor = Actor(input_size, output_size, continous=continous).to(device)
+        critic = Critic(input_size).to(device)
 
         # Optimizers for the actor and critic
         actor_optimizer = torch.optim.Adam(actor.parameters(), lr=lr_actor)
@@ -165,7 +169,8 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
             
             for i in range(K):
                 for j in range(n):
-                    done = env_step(k_n_states, k_n_rewards, log_probs, last_K_state, dones, actor, rewards, worker_state, worker_envs, i, prob_mask, continous = continous, episode_returns=episode_returns)
+                    done = env_step(k_n_states, k_n_rewards, log_probs, last_K_state, dones, actor, rewards, worker_state,
+                                    worker_envs, i, prob_mask, continous = continous, episode_returns=episode_returns, device=device)
                     if done:
                         break
             
@@ -181,9 +186,9 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
             log_probs_flat = [prob for worker_probs in log_probs for prob in worker_probs]
 
     
-            advantages = torch.tensor(returns_flat).float() - critic(torch.tensor(k_n_states_flat).float()).squeeze(-1)
-            actor_loss = -torch.mean(torch.stack(log_probs_flat).float() * advantages.clone().detach())
-            critic_loss = nn.MSELoss()(critic(torch.tensor(k_n_states_flat).float()).squeeze(-1), torch.tensor(returns_flat).float())
+            advantages = torch.tensor(returns_flat).float().to(device) - critic(torch.tensor(k_n_states_flat).float().to(device)).squeeze(-1)
+            actor_loss = -torch.mean(torch.stack(log_probs_flat).float().to(device) * advantages.clone().detach())
+            critic_loss = nn.MSELoss()(critic(torch.tensor(k_n_states_flat).float().to(device)).squeeze(-1), torch.tensor(returns_flat).float().to(device))
             
             update_params(actor_optimizer, actor_loss)
             update_params(critic_optimizer, critic_loss)
@@ -214,24 +219,24 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
                 for i in range(num_eval_episodes):
                     state, _ = eval_env.reset(seed=seed)
                     
-                    if i == 0 and record_video and (step + eval_interval > max_steps):
-                        eval_env = RecordVideo(eval_env, "./mp4") 
+                    if (i == 0) and (seed == seeds[0]) and (record_video is not None) and (step + eval_interval > max_steps):
+                        eval_env = RecordVideo(eval_env, "./" + record_video) 
                     
                     done = False
                     episode_return = 0
                     
                     while not done:
                         if continous:
-                            mean, _ = actor(torch.tensor(state, dtype=torch.float32))
+                            mean, _ = actor(torch.tensor(state, dtype=torch.float32).to(device))
                             action = torch.clamp(mean.detach(), -3, 3)
                         else:
-                            action_prob = actor(torch.tensor(state))
+                            action_prob = actor(torch.tensor(state).to(device))
                             action = torch.argmax(action_prob).item()
                         
                         state, reward, terminated, truncated, _ = eval_env.step(action)
                         episode_return += reward
                         
-                        if i == 0 and record_video and (step + eval_interval > max_steps):
+                        if (i == 0) and (seed == seeds[0]) and (record_video is not None) and (step + eval_interval > max_steps):
                             eval_env.render()
                             
                         done = terminated or truncated
@@ -264,11 +269,11 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
         for env in worker_envs:
             env.close()
             
-    plot_result(value_trajectories_all, 'Time Step', 'Mean value', 'Mean over value function trajectories')
-    plot_result(train_return_history_all, 'Time Step', 'Average Return', 'Return during Training')
-    plot_result(eval_return_history_all, 'Time Step', 'Average Return', 'Return during Evaluation')
-    plot_result(train_loss_critic_history_all, 'Time Step', 'Loss', 'Loss of Critic during Training')
-    plot_result(train_loss_actor_history_all, 'Time Step', 'Loss', 'Loss of Actor during Training')
+    plot_result(value_trajectories_all, 'Time Step', 'Value Function', 'Mean Over Value Function Trajectories', range_step= eval_interval)
+    plot_result(train_return_history_all, 'Episode', 'Average Return', 'Return During Training')
+    plot_result(eval_return_history_all, 'Time Step', 'Average Return', 'Return During Evaluation', range_step =eval_interval)
+    plot_result(train_loss_critic_history_all, 'Time Step', 'Loss', 'Loss of Critic During Training', range_step =log_interval)
+    plot_result(train_loss_actor_history_all, 'Time Step', 'Loss', 'Loss of Actor During Training', range_step =log_interval)
 
 ### Testing
 
