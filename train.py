@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import gymnasium as gym
 import numpy as np
+import math
 import matplotlib.pyplot as plt
 from gymnasium.wrappers import RecordVideo
 
@@ -80,10 +81,14 @@ def update_params(optimizer, loss):
         loss.backward()
         optimizer.step()
         
-def plot_result(return_history, xlabel, ylabel, title, range_step = 1):
+def plot_result(return_history, xlabel, ylabel, title, range_step = 1, min_returns_all = None, max_returns_all = None):
 
     plt.figure(figsize=(8, 6))
-    if type(return_history[0]) == list:
+    if min_returns_all is not None and max_returns_all is not None:
+        plt.plot(range(range_step,range_step*len(return_history) + range_step, range_step), return_history, label='Mean')
+        plt.fill_between(range(range_step,range_step*len(return_history) + range_step, range_step), min_returns_all, max_returns_all, alpha=0.2, label='Min/Max')
+        plt.legend()
+    elif type(return_history[0]) == list:
         mean_returns = avg_log(return_history)
         
         longest_list = max(return_history, key=len)    
@@ -116,12 +121,22 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
     train_loss_actor_history_all = []
     train_loss_critic_history_all = []
     value_trajectories_all = []
-        
+    min_log_returns_all = [] # [ [500 min values], [500 min values], [500 min values] ]
+    mean_log_returns_all = [] 
+    max_log_returns_all = [] 
+    log_interval = math.ceil((log_interval / (K*n))) * K*n#1000
+    eval_interval = math.ceil((eval_interval / (K*n))) * K*n#5000
+    value_funcs_20_100_500 = []
+    
     for seed in seeds:
+        min_log_returns = [] # [ [500 min values], [500 min values], [500 min values] ]
+        mean_log_returns = [] 
+        max_log_returns = [] 
         torch.manual_seed(seed)
         np.random.seed(seed)
-        log_interval = (log_interval// (K*n)) * K*n#1000
-        eval_interval = (eval_interval// (K*n)) * K*n#5000
+
+        print(eval_interval)
+        print(log_interval)
 
         # Create enviroment
         worker_envs = [gym.make(env_name) for _ in range(K)]
@@ -131,7 +146,7 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
             output_size = 1
         else:
             output_size = worker_envs[0].action_space.n
-
+        
         # Create actor and critic
         actor = Actor(input_size, output_size, continous=continous).to(device)
         critic = Critic(input_size).to(device)
@@ -171,24 +186,32 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
                 for j in range(n):
                     done = env_step(k_n_states, k_n_rewards, log_probs, last_K_state, dones, actor, rewards, worker_state,
                                     worker_envs, i, prob_mask, continous = continous, episode_returns=episode_returns, device=device)
-                    if done:
-                        break
+                    if done: break# [[[s1, s2]],[[s1, s2, s3, s4, s5, s6]]]
+                        #[ [ [s1, s2], [] ], [[s1, s2, s3, s4, s5, s6]]]
+                        # [s1 s2 s1]
+                        # r1 + gamma*r2 
             
             for i in range(K):
                 discounting = []
-                N = len(k_n_states[i]) # [[s1, s2], [s1, s2, s3, s4, s5]]
-                for j in range(N):
+                N = len(k_n_states[i]) # [[s1, s2],[s1, s2, s3, s4, s5, s6]]
+                
+                for j in range(N):     #   s1, s2, ---- s1, s2, s3, s4 
                     discounting = [gamma** power for power in range(N - j)] # [gamma^0, gamma^1, gamma^2, gamma^3]
-                    returns[i].append(np.dot(discounting, k_n_rewards[i][j:]) + (1-dones[i])*gamma**(N-j) * critic(torch.tensor(last_K_state[i], dtype=torch.float32)).item())
+                    returns[i].append(np.dot(discounting, k_n_rewards[i][j:]) + (1-dones[i])*gamma**(N-j) * critic(torch.tensor(last_K_state[i], dtype=torch.float32).to(device)).item())
 
             k_n_states_flat = [state for worker_states in k_n_states for state in worker_states]
             returns_flat = [ret for worker_returns in returns for ret in worker_returns]
             log_probs_flat = [prob for worker_probs in log_probs for prob in worker_probs]
 
     
-            advantages = torch.tensor(returns_flat).float().to(device) - critic(torch.tensor(k_n_states_flat).float().to(device)).squeeze(-1)
-            actor_loss = -torch.mean(torch.stack(log_probs_flat).float().to(device) * advantages.clone().detach())
-            critic_loss = nn.MSELoss()(critic(torch.tensor(k_n_states_flat).float().to(device)).squeeze(-1), torch.tensor(returns_flat).float().to(device))
+            returns_flat = torch.tensor(returns_flat).float().to(device)
+            value = critic(torch.tensor(k_n_states_flat).float().to(device)).squeeze(-1)
+            with torch.no_grad():
+                advantages = returns_flat - value
+
+            actor_loss = -torch.mean(torch.stack(log_probs_flat).float().to(device) * advantages)
+            critic_loss = nn.MSELoss()(value, returns_flat)
+
             
             update_params(actor_optimizer, actor_loss)
             update_params(critic_optimizer, critic_loss)
@@ -196,18 +219,28 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
             # episode, y1 y2 y
             # Logging
             if step % (log_interval) == 0 and step > 0:
-                avg_returns = [np.mean(returns) for returns in episode_returns if len(returns) > 0]
+                #if len(returns) == 0:
+                #    print(f"FUCKED UP: {returns}")
+                #    return
+                #
+                #avg_returns = [np.mean(returns) for returns in episode_returns if len(returns) > 0]
+                episode_returns_flat = [reward for worker in episode_returns for reward in worker]
+                min_log_returns.append(min(episode_returns_flat))
+                max_log_returns.append(max(episode_returns_flat))
+                
                 train_loss_actor_history.append(actor_loss.item())
                 train_loss_critic_history.append(critic_loss.item())
-                if avg_returns:
-                    avg_return = np.mean(avg_returns)
-                    train_return_history.extend(avg_log(episode_returns))
+                #if avg_returns:
+                avg_return = np.mean(episode_returns_flat)
+                mean_log_returns.append(avg_return)
 
-                    
-                    print(f"Step {step}: Average episodic return = {avg_return:.2f}")
-                    print(f"Step {step}: Critic loss = {critic_loss.item():.4f}")
-                    print(f"Step {step}: Actor loss = {actor_loss.item():.4f}")
-                    episode_returns = [[] for _ in range(K)]
+                #train_return_history.extend(avg_log(episode_returns))
+
+                
+                print(f"Step {step}: Average episodic return = {avg_return:.2f}")
+                print(f"Step {step}: Critic loss = {critic_loss.item():.4f}")
+                print(f"Step {step}: Actor loss = {actor_loss.item():.4f}")
+                episode_returns = [[] for _ in range(K)]
 
             # Evaluation
             if step % (eval_interval) == 0 and step > 0:
@@ -216,6 +249,10 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
                 
                 trajectory_states = []
                 trajectory_values = []
+                
+                first = step == eval_interval
+                middle = step == eval_interval*5
+                last = step + eval_interval == max_steps
                 for i in range(num_eval_episodes):
                     state, _ = eval_env.reset(seed=seed)
                     
@@ -241,16 +278,22 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
                             
                         done = terminated or truncated
                         
-                        if i == 0:
+
+                        if i == 0 :
                             trajectory_states.append(state)
-                            value = critic(torch.tensor(state, dtype=torch.float32)).item()
+                            value = critic(torch.tensor(state, dtype=torch.float32).to(device)).item()
                             trajectory_values.append(value)
                             
 
                     eval_returns.append(episode_return)
                 
-                plot_result(trajectory_values, 'Time Step', 'Value Function', 'Value Function on Sampled Trajectory')
+                #print(trajectory_values)
                 
+                plot_result(trajectory_values, 'Time Step', 'Value Function', 'Value Function on Sampled Trajectory')
+                if (first or middle) and seed == seeds[0]:
+                    value_funcs_20_100_500.append(trajectory_values)
+                    
+                    
                 value_trajectories.append(np.mean(trajectory_values))
                 avg_eval_return = np.mean(eval_returns)
                 eval_return_history.append(avg_eval_return)
@@ -258,7 +301,7 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
                 print(f"Step {step}: Average evaluation return = {avg_eval_return:.2f}")
 
             step += K*n
-
+        value_funcs_20_100_500.append(value_trajectories)
         value_trajectories_all.append(value_trajectories)
         train_return_history_all.append(train_return_history)
         eval_return_history_all.append(eval_return_history)
@@ -268,12 +311,32 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
         # Close the worker environments
         for env in worker_envs:
             env.close()
-            
-    plot_result(value_trajectories_all, 'Time Step', 'Value Function', 'Mean Over Value Function Trajectories', range_step= eval_interval)
-    plot_result(train_return_history_all, 'Episode', 'Average Return', 'Return During Training')
-    plot_result(eval_return_history_all, 'Time Step', 'Average Return', 'Return During Evaluation', range_step =eval_interval)
-    plot_result(train_loss_critic_history_all, 'Time Step', 'Loss', 'Loss of Critic During Training', range_step =log_interval)
-    plot_result(train_loss_actor_history_all, 'Time Step', 'Loss', 'Loss of Actor During Training', range_step =log_interval)
+        
+        min_log_returns_all.append(min_log_returns)
+        mean_log_returns_all.append(mean_log_returns)
+        max_log_returns_all.append(max_log_returns)
+    
+    min_log_returns_all = np.min(np.array(min_log_returns_all), axis=0).tolist()
+    mean_log_returns_all = np.mean(np.array(mean_log_returns_all), axis=0).tolist()
+    max_log_returns_all = np.max(np.array(max_log_returns_all), axis=0).tolist()
+    
+    #plot_result(value_trajectories_all, 'Time Step', 'Value Function', 'Mean Over Value Function Trajectories', range_step= eval_interval)
+    #plot_result(train_return_history_all, 'Episode', 'Average Return', 'Return During Training')
+    #plot_result(mean_log_returns_all, 'Episode', 'Average Return', 'Return During Training', min_returns_all = min_log_returns_all, max_returns_all = max_log_returns_all, range_step = log_interval)
+    #plot_result(eval_return_history_all, 'Time Step', 'Average Return', 'Return During Evaluation', range_step =eval_interval)
+    #plot_result(train_loss_critic_history_all, 'Time Step', 'Loss', 'Loss of Critic During Training', range_step =log_interval)
+    #plot_result(train_loss_actor_history_all, 'Time Step', 'Loss', 'Loss of Actor During Training', range_step =log_interval)
+
+    dict_list = {"value_funcs_20_100_500" : value_funcs_20_100_500, 
+                "value_trajectories_all": value_trajectories_all,
+                "mean_log_returns_all": mean_log_returns_all,
+                "min_log_returns_all": min_log_returns_all,
+                "max_log_returns_all": max_log_returns_all, 
+                "eval_return_history_all": eval_return_history_all, 
+                "train_loss_critic_history_all": train_loss_critic_history_all, 
+                "train_loss_actor_history_all": train_loss_actor_history_all}
+
+    return dict_list
 
 ### Testing
 
