@@ -7,6 +7,15 @@ import matplotlib.pyplot as plt
 from gymnasium.wrappers import RecordVideo
 
 class Actor(nn.Module):
+    """
+    Actor network for policy-based reinforcement learning.
+
+    Args:
+        input_size (int): Dimension of the input (state) space.
+        output_size (int): Dimension of the output (action) space.
+        hidden_size (int, optional): Dimension of hidden layers. Default is 64.
+        continous (bool, optional): Flag to indicate if the action space is continuous. Default is False.
+    """
     def __init__(self, input_size, output_size, hidden_size=64, continous = False):
         super(Actor, self).__init__()
         self.continous = continous
@@ -21,6 +30,15 @@ class Actor(nn.Module):
         
 
     def forward(self, x):
+        """
+        Forward pass of the actor network.
+
+        Args:
+            x (torch.Tensor): Input state.
+
+        Returns:
+            torch.Tensor: Action probabilities or mean and log standard deviation for continuous action space.
+        """ 
         x = self.activation(self.fc1(x))
         x = self.activation(self.fc2(x))
         x = self.fc3(x)
@@ -30,6 +48,13 @@ class Actor(nn.Module):
         return self.policy(x)
 
 class Critic(nn.Module):
+    """
+    Critic network for value-based reinforcement learning.
+
+    Args:
+        input_size (int): Dimension of the input (state) space.
+        hidden_size (int, optional): Dimension of hidden layers. Default is 64.
+    """
     def __init__(self, input_size, hidden_size=64):
         super(Critic, self).__init__()
         self.fc1 = nn.Linear(input_size, hidden_size)
@@ -38,6 +63,15 @@ class Critic(nn.Module):
         self.activation = nn.Tanh()
 
     def forward(self, x):
+        """
+        Forward pass of the critic network.
+
+        Args:
+            x (torch.Tensor): Input state.
+
+        Returns:
+            torch.Tensor: State value.
+        """
         x = self.activation(self.fc1(x))
         x = self.activation(self.fc2(x))
         x = self.fc3(x)
@@ -45,7 +79,28 @@ class Critic(nn.Module):
 
 def env_step(k_n_states, k_n_rewards, log_probs, last_K_state, terminations, actor, rewards, worker_state,
              worker_envs, i, prob_mask, episode_returns, continous=False, device = "cpu"):
-    
+    """
+    Perform an environment step for a single worker and updates all the incoming arguments.
+
+    Args:
+        k_n_states (list): List to store states for each worker.
+        k_n_rewards (list): List to store rewards for each worker.
+        log_probs (list): List to store log probabilities of actions.
+        last_K_state (list): List to store the last state of each worker (for bootstrap).
+        terminations (list): List to store termination flags for each worker.
+        actor (Actor): Actor network.
+        rewards (list): List to accumulate rewards for each worker.
+        worker_state (list): Current state for each worker.
+        worker_envs (list): List of environment instances for each worker.
+        i (int): Index of the current worker.
+        prob_mask (float): Probability mask for rewards.
+        episode_returns (list): List to store episodic returns for each worker.
+        continous (bool, optional): Flag to indicate if the action space is continuous. Default is False.
+        device (str, optional): Device to perform computations on. Default is "cpu".
+
+    Returns:
+        bool: Flag indicating if the episode has ended.
+    """
     state = worker_state[i]
     k_n_states[i][-1].append(state) # Append state to the last episode for worker i
     if continous:
@@ -79,6 +134,13 @@ def env_step(k_n_states, k_n_rewards, log_probs, last_K_state, terminations, act
     return done
 
 def update_params(optimizer, loss):
+        """
+        Update network parameters using the given optimizer and loss.
+
+        Args:
+            optimizer (torch.optim.Optimizer): Optimizer instance.
+            loss (torch.Tensor): Computed loss.
+        """
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -119,6 +181,30 @@ def plot_result(return_history, xlabel, ylabel, title, range_step = 1, min_retur
 # Set hyperparameters
 def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, eval_interval,
           num_eval_episodes, max_steps, prob_mask, device = "cpu", seeds = [69], record_video = None):
+    
+    """
+    Train the actor-critic model.
+
+    Args:
+        lr_actor (float): Learning rate for the actor network.
+        lr_critic (float): Learning rate for the critic network.
+        gamma (float): Discount factor.
+        K (int): Number of workers.
+        n (int): Number of steps per worker before updating the network.
+        env_name (str): Name of the environment.
+        continous (bool): Flag to indicate if the action space is continuous.
+        log_interval (int): Interval for logging training information.
+        eval_interval (int): Interval for evaluation.
+        num_eval_episodes (int): Number of episodes for evaluation.
+        max_steps (int): Maximum number of training steps.
+        prob_mask (float): Probability mask for rewards.
+        device (str, optional): Device to perform computations on. Default is "cpu".
+        seeds (list, optional): List of random seeds. Default is [69].
+        record_video (str, optional): Path to save evaluation videos. Default is None.
+
+    Returns:
+        dict: Dictionary containing training and evaluation results.
+    """
     #train_return_history_all = [] # REMOVE
     eval_return_history_all = [] # Eval return history for all seeds: [[], [], []]
     train_loss_actor_history_all = [] # Actor loss history for all seeds: [[], [], []]
