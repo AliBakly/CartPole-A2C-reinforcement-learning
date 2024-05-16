@@ -43,32 +43,34 @@ class Critic(nn.Module):
         x = self.fc3(x)
         return x
 
-def env_step(k_n_states, k_n_rewards, log_probs, last_K_state, dones, actor, rewards, worker_state,
+def env_step(k_n_states, k_n_rewards, log_probs, last_K_state, terminations, actor, rewards, worker_state,
              worker_envs, i, prob_mask, episode_returns, continous=False, device = "cpu"):
+    
     state = worker_state[i]
-    k_n_states[i].append(state) 
+    k_n_states[i][-1].append(state) # Append state to the last episode for worker i
     if continous:
         mean, log_std = actor(torch.tensor(state, dtype=torch.float32).to(device))
 
         std = torch.exp(log_std)
-        dist = torch.distributions.Normal(mean, std)
+        dist = torch.distributions.Normal(mean, std) # Normal distribution for continous action space
         action = dist.sample()
-        log_probs[i].append(dist.log_prob(action))
+        log_probs[i].append(dist.log_prob(action)) 
         action = torch.clamp(action, -3, 3)
     else:
-        action_prob = actor(torch.tensor(state).to(device))
-        action = torch.multinomial(action_prob, 1).item()
+        action_prob = actor(torch.tensor(state).to(device)) # Get action probabilities
+        action = torch.multinomial(action_prob, 1).item() # Sample action from the action probability distribution
         log_probs[i].append(torch.log(action_prob[action]))
         
     next_state, reward, terminated, truncated, _ = worker_envs[i].step(action)
     done = terminated or truncated
     rewards[i] = rewards[i] + reward
     mask = np.random.binomial(1, prob_mask)
-    k_n_rewards[i].append(reward*mask)
+    k_n_rewards[i][-1].append(reward*mask) # Append reward to the last episode for worker i with probability prob_mask
+    
     worker_state[i] = next_state
-    last_K_state[i] = next_state
-    dones[i] = terminated
-    if done:
+    last_K_state[i][-1] = next_state
+    terminations[i][-1] = terminated
+    if done: # If an episode ends, we append the episodic return to the episode_returns list and reset the environment
         episode_returns[i].append(rewards[i])
         rewards[i] = 0
         state, _ = worker_envs[i].reset()
@@ -81,6 +83,7 @@ def update_params(optimizer, loss):
         loss.backward()
         optimizer.step()
         
+# Plotting function MIGHT REMOVE !!!
 def plot_result(return_history, xlabel, ylabel, title, range_step = 1, min_returns_all = None, max_returns_all = None):
 
     plt.figure(figsize=(8, 6))
@@ -116,34 +119,33 @@ def plot_result(return_history, xlabel, ylabel, title, range_step = 1, min_retur
 # Set hyperparameters
 def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, eval_interval,
           num_eval_episodes, max_steps, prob_mask, device = "cpu", seeds = [69], record_video = None):
-    train_return_history_all = []
-    eval_return_history_all = []
-    train_loss_actor_history_all = []
-    train_loss_critic_history_all = []
-    value_trajectories_all = []
-    min_log_returns_all = [] # [ [500 min values], [500 min values], [500 min values] ]
-    mean_log_returns_all = [] 
-    max_log_returns_all = [] 
-    log_interval = math.ceil((log_interval / (K*n))) * K*n#1000
-    eval_interval = math.ceil((eval_interval / (K*n))) * K*n#5000
-    value_funcs_20_100_500 = []
+    #train_return_history_all = [] # REMOVE
+    eval_return_history_all = [] # Eval return history for all seeds: [[], [], []]
+    train_loss_actor_history_all = [] # Actor loss history for all seeds: [[], [], []]
+    train_loss_critic_history_all = [] # Critic loss history for all seeds: [[], [], []]
+    value_trajectories_all = []  # Value function trajectories for all seeds: [[], [], []]
+    min_log_returns_all = [] # Min return at each log interval for all seeds: [[], [], []]
+    mean_log_returns_all = [] # Mean return at each log interval for all seeds: [[], [], []]
+    max_log_returns_all = []  # Max return at each log interval for all seeds: [[], [], []]
+    log_interval = math.ceil((log_interval / (K*n))) * K*n # Adjust log_interval to be divisible by K*n
+    eval_interval = math.ceil((eval_interval / (K*n))) * K*n # Adjust eval_interval to be divisible by K*n
+    #value_funcs_20_100_500 = [] # REMOVE
     
-    for seed in seeds:
-        min_log_returns = [] # [ [500 min values], [500 min values], [500 min values] ]
-        mean_log_returns = [] 
-        max_log_returns = [] 
+    for seed in seeds: # Loop over all seeds
+        min_log_returns = [] # Min return at each log interval for current seed
+        mean_log_returns = [] # Mean return at each log interval for current seed
+        max_log_returns = [] # Max return at each log interval for current seed
+        
+        # Set seed
         torch.manual_seed(seed)
         np.random.seed(seed)
 
-        print(eval_interval)
-        print(log_interval)
-
-        # Create enviroment
+        # Create enviroment. We do not use vectorized environments in this implementation.
         worker_envs = [gym.make(env_name) for _ in range(K)]
 
         input_size = worker_envs[0].observation_space.shape[0]
         if continous:
-            output_size = 1
+            output_size = 1 # Continous action only oututs the mean of the normal distribution
         else:
             output_size = worker_envs[0].action_space.n
         
@@ -156,142 +158,152 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
         critic_optimizer = torch.optim.Adam(critic.parameters(), lr=lr_critic)
 
         #
-        episode_returns = [[] for _ in range(K)]
-        # [[r r r], [r,r,,r], [r,r,r]]
-        episode_count = 0
+        episode_returns = [[] for _ in range(K)] # List of lists to store episodic returns for each worker (only last 1k steps)
 
-        # Training loop
-        step = 0
-        #start_state, _ = env.reset()
-        worker_state = [worker_env.reset(seed=seed)[0] for worker_env in worker_envs]
-        rewards = np.zeros(K)
+        step = 0 # Step counter
+        worker_state = [worker_env.reset(seed=seed)[0] for worker_env in worker_envs] # Initial state for each worker
+        rewards = np.zeros(K) # Reward accumulator for each worker, reset when an episode ends
 
-        train_return_history = []
+        #train_return_history = [] # REMOVE
         eval_return_history = []
 
-        train_loss_actor_history = []
-        train_loss_critic_history = []
-        value_trajectories = []
+        train_loss_actor_history = [] # Actor loss history for current seed
+        train_loss_critic_history = [] # Critic loss history for current seed
+        value_trajectories = [] # Value function trajectories for current seed
 
-        while step <= max_steps:
-            advantages = []
-            returns = [[] for _ in range(K)] #[[ 1 2 3], [1 2 3 4 5]]
-            k_n_states = [[] for _ in range(K)]
-            k_n_rewards = [[] for _ in range(K)]
-            log_probs =  [[] for _ in range(K)]#torch.zeros(K)
-            last_K_state = [None for _ in range(K)]
-            dones = [False for _ in range(K)]
+        while step <= max_steps: # Loop over steps
+            # advantages = [] REMOVE
+            returns = [[] for _ in range(K)] # R-values for each worker
             
-            for i in range(K):
-                for j in range(n):
-                    done = env_step(k_n_states, k_n_rewards, log_probs, last_K_state, dones, actor, rewards, worker_state,
-                                    worker_envs, i, prob_mask, continous = continous, episode_returns=episode_returns, device=device)
-                    if done: break# [[[s1, s2]],[[s1, s2, s3, s4, s5, s6]]]
-                        #[ [ [s1, s2], [] ], [[s1, s2, s3, s4, s5, s6]]]
-                        # [s1 s2 s1]
-                        # r1 + gamma*r2 
+            # Two lists below are of form [ [[s1, s2], [s1, s2, s3, s4]],  [[s1, s2, s3, s4, s5, s6]]] for K = 2, n = 6
+            # Here [[s1, s2], [s1, s2, s3, s4]] are the states for worker 1, where [s1 s2] and [s1 s2 s3 s4] are the states for seperate episodes                               
+            k_n_states = [[[]] for _ in range(K)] # K*n states in the form explained above
+            k_n_rewards = [[[]] for _ in range(K)] # K*n rewards in the form explained above
             
-            for i in range(K):
-                discounting = []
-                N = len(k_n_states[i]) # [[s1, s2],[s1, s2, s3, s4, s5, s6]]
-                
-                for j in range(N):     #   s1, s2, ---- s1, s2, s3, s4 
-                    discounting = [gamma** power for power in range(N - j)] # [gamma^0, gamma^1, gamma^2, gamma^3]
-                    returns[i].append(np.dot(discounting, k_n_rewards[i][j:]) + (1-dones[i])*gamma**(N-j) * critic(torch.tensor(last_K_state[i], dtype=torch.float32).to(device)).item())
+            log_probs =  [[] for _ in range(K)] # Log probabilities for each worker
+            
+            # Two lists below are of form [ [s1, s2], [s1]] for K = 2. Here [s1, s2] is the states to bootsrap on 
+            # for worker 1, where s1 and s2 are the states for seperate episodes.    
+            last_K_state = [[None] for _ in range(K)] # The state we will bootstrap from for each worker [[], []]
+            terminations = [[False] for _ in range(K)] # Termination flag for each worker [[], []]
+            
+                        
+            for i in range(K): # Loop over workers
+                for j in range(n): # Loop over steps for each worker
+                    done = env_step(k_n_states, k_n_rewards, log_probs, last_K_state, terminations, actor, rewards, worker_state,
+                                    worker_envs, i, prob_mask, continous = continous, episode_returns = episode_returns, device=device)
+                    
+                    if done and j < n-1: # If an episode ends before n steps, we append accordingly
+                        k_n_states[i].append([])
+                        k_n_rewards[i].append([])
+                        last_K_state[i].append(None)
+                        terminations[i].append(False)
 
-            k_n_states_flat = [state for worker_states in k_n_states for state in worker_states]
+            # Calculate returns (R-values)
+            for i in range(K):
+                n_episode_breaks = len(k_n_states[i]) # Number of episodes for worker i
+                for episode in range(n_episode_breaks):
+                    N = len(k_n_states[i][episode]) # Number of steps collected in episode x
+                    for j in range(N): 
+                        discounting = [gamma** power for power in range(N - j)] # Discounting factor for each step in episode x
+                        returns[i].append(np.dot(discounting, k_n_rewards[i][episode][j:]) + (1-terminations[i][episode])*gamma**(N-j) * critic(torch.tensor(last_K_state[i][episode], dtype=torch.float32).to(device)).item())
+
+            # Flatten lists for calculation of loss and advantage
+            k_n_states_flat = [x for sublist1 in k_n_states for sublist2 in sublist1 for x in sublist2]
             returns_flat = [ret for worker_returns in returns for ret in worker_returns]
             log_probs_flat = [prob for worker_probs in log_probs for prob in worker_probs]
-
     
-            returns_flat = torch.tensor(returns_flat).float().to(device)
+            returns_flat = torch.tensor(returns_flat).float().to(device) # This one does not track gradients!
             value = critic(torch.tensor(k_n_states_flat).float().to(device)).squeeze(-1)
-            with torch.no_grad():
-                advantages = returns_flat - value
 
+            with torch.no_grad(): # No gradient for the advantage calculation
+                advantages = returns_flat - value # Calculate advantage
+
+            # Calculate actor and critic loss
             actor_loss = -torch.mean(torch.stack(log_probs_flat).float().to(device) * advantages)
             critic_loss = nn.MSELoss()(value, returns_flat)
 
-            
+            # Update actor and critic
             update_params(actor_optimizer, actor_loss)
             update_params(critic_optimizer, critic_loss)
-            #[idx, y]
-            # episode, y1 y2 y
+
             # Logging
             if step % (log_interval) == 0 and step > 0:
-                #if len(returns) == 0:
-                #    print(f"FUCKED UP: {returns}")
-                #    return
-                #
                 #avg_returns = [np.mean(returns) for returns in episode_returns if len(returns) > 0]
+                
+                # Flatten list of episodic returns and calculate min, max and mean
                 episode_returns_flat = [reward for worker in episode_returns for reward in worker]
-                min_log_returns.append(min(episode_returns_flat))
-                max_log_returns.append(max(episode_returns_flat))
-                
-                train_loss_actor_history.append(actor_loss.item())
-                train_loss_critic_history.append(critic_loss.item())
-                #if avg_returns:
-                avg_return = np.mean(episode_returns_flat)
-                mean_log_returns.append(avg_return)
+                if episode_returns_flat:
+                    min_log_returns.append(min(episode_returns_flat))
+                    max_log_returns.append(max(episode_returns_flat))
+                    
+                    avg_return = np.mean(episode_returns_flat) # The value here will be averaged over all seeds 
+                    mean_log_returns.append(avg_return)
+                    
+                    train_loss_actor_history.append(actor_loss.item())
+                    train_loss_critic_history.append(critic_loss.item())
+                    #if avg_returns:
+                    #train_return_history.extend(avg_log(episode_returns))
 
-                #train_return_history.extend(avg_log(episode_returns))
-
+                    # Print logging information
+                    print(f"Step {step}: Average episodic return = {avg_return:.2f}")
+                    print(f"Step {step}: Critic loss = {critic_loss.item():.7f}")
+                    print(f"Step {step}: Actor loss = {actor_loss.item():.7f}")
                 
-                print(f"Step {step}: Average episodic return = {avg_return:.2f}")
-                print(f"Step {step}: Critic loss = {critic_loss.item():.4f}")
-                print(f"Step {step}: Actor loss = {actor_loss.item():.4f}")
-                episode_returns = [[] for _ in range(K)]
+                    episode_returns = [[] for _ in range(K)] # Reset episodic returns
 
             # Evaluation
             if step % (eval_interval) == 0 and step > 0:
                 eval_env = gym.make(env_name, render_mode = "rgb_array")  # Create a new environment for evaluation
-                eval_returns = []
+                eval_returns = [] # List to store evaluation returns
+                trajectory_states = [] # List to store states for value function trajectory
+                trajectory_values = [] # List to store values for value function trajectory
                 
-                trajectory_states = []
-                trajectory_values = []
-                
-                first = step == eval_interval
-                middle = step == eval_interval*5
-                last = step + eval_interval == max_steps
-                for i in range(num_eval_episodes):
+                #first = step == eval_interval
+                #middle = step == eval_interval*5
+                #last = step + eval_interval == max_steps # REMOVE
+                for i in range(num_eval_episodes): # Loop over evaluation episodes
                     state, _ = eval_env.reset(seed=seed)
                     
-                    if (i == 0) and (seed == seeds[0]) and (record_video is not None) and (step + eval_interval > max_steps):
+                    record_video_condition = (i == 0) and (seed == seeds[0]) and (record_video is not None) and (step + eval_interval > max_steps)
+                    
+                    # Record video for first eval loop (over num_eval_episodes), the first seed and time we run eval
+                    if record_video_condition:
                         eval_env = RecordVideo(eval_env, "./" + record_video) 
                     
                     done = False
                     episode_return = 0
                     
                     while not done:
-                        if continous:
-                            mean, _ = actor(torch.tensor(state, dtype=torch.float32).to(device))
-                            action = torch.clamp(mean.detach(), -3, 3)
-                        else:
-                            action_prob = actor(torch.tensor(state).to(device))
-                            action = torch.argmax(action_prob).item()
+                        if continous: #
+                            with torch.no_grad(): # No gradient for evaluation
+                                mean, _ = actor(torch.tensor(state, dtype=torch.float32).to(device)) # Greedy action so we take the most likely action, the mean
+                            action = torch.clamp(mean, -3, 3) 
+                        else: # Discrete action space
+                            with torch.no_grad(): # No gradient for evaluation
+                                action_prob = actor(torch.tensor(state).to(device))
+                            action = torch.argmax(action_prob).item() # Greedy action
                         
                         state, reward, terminated, truncated, _ = eval_env.step(action)
                         episode_return += reward
                         
-                        if (i == 0) and (seed == seeds[0]) and (record_video is not None) and (step + eval_interval > max_steps):
+                        # Render the env if conditions for recodring video are met
+                        if record_video_condition:
                             eval_env.render()
                             
                         done = terminated or truncated
                         
-
-                        if i == 0 :
+                        if i == 0 : # Only store states and values for the first evaluation episode (arbitrary)
                             trajectory_states.append(state)
                             value = critic(torch.tensor(state, dtype=torch.float32).to(device)).item()
                             trajectory_values.append(value)
                             
-
                     eval_returns.append(episode_return)
                 
-                #print(trajectory_values)
                 
                 plot_result(trajectory_values, 'Time Step', 'Value Function', 'Value Function on Sampled Trajectory')
-                if (first or middle) and seed == seeds[0]:
-                    value_funcs_20_100_500.append(trajectory_values)
+                #if (first or middle) and seed == seeds[0]:
+                #    value_funcs_20_100_500.append(trajectory_values)
                     
                     
                 value_trajectories.append(np.mean(trajectory_values))
@@ -301,9 +313,9 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
                 print(f"Step {step}: Average evaluation return = {avg_eval_return:.2f}")
 
             step += K*n
-        value_funcs_20_100_500.append(value_trajectories)
+        #value_funcs_20_100_500.append(value_trajectories) # REMOVE
         value_trajectories_all.append(value_trajectories)
-        train_return_history_all.append(train_return_history)
+        #train_return_history_all.append(train_return_history) # REMOVE
         eval_return_history_all.append(eval_return_history)
         train_loss_actor_history_all.append(train_loss_actor_history)
         train_loss_critic_history_all.append(train_loss_critic_history)    
@@ -327,7 +339,7 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
     #plot_result(train_loss_critic_history_all, 'Time Step', 'Loss', 'Loss of Critic During Training', range_step =log_interval)
     #plot_result(train_loss_actor_history_all, 'Time Step', 'Loss', 'Loss of Actor During Training', range_step =log_interval)
 
-    dict_list = {"value_funcs_20_100_500" : value_funcs_20_100_500, 
+    dict_list = {#"value_funcs_20_100_500" : value_funcs_20_100_500, 
                 "value_trajectories_all": value_trajectories_all,
                 "mean_log_returns_all": mean_log_returns_all,
                 "min_log_returns_all": min_log_returns_all,
