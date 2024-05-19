@@ -213,8 +213,8 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
     min_log_returns_all = [] # Min return at each log interval for all seeds: [[], [], []]
     mean_log_returns_all = [] # Mean return at each log interval for all seeds: [[], [], []]
     max_log_returns_all = []  # Max return at each log interval for all seeds: [[], [], []]
-    log_interval = math.ceil((log_interval / (K*n))) * K*n # Adjust log_interval to be divisible by K*n
-    eval_interval = math.ceil((eval_interval / (K*n))) * K*n # Adjust eval_interval to be divisible by K*n
+    log_interval = (log_interval // (K*n)) * K*n # Adjust log_interval to be divisible by K*n
+    eval_interval = (eval_interval // (K*n)) * K*n # Adjust eval_interval to be divisible by K*n
     #value_funcs_20_100_500 = [] # REMOVE
     
     for seed in seeds: # Loop over all seeds
@@ -299,10 +299,9 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
             returns_flat = [ret for worker_returns in returns for ret in worker_returns]
             log_probs_flat = [prob for worker_probs in log_probs for prob in worker_probs]
     
-            returns_flat = torch.tensor(returns_flat).float().to(device) # This one does not track gradients!
             value = critic(torch.tensor(k_n_states_flat).float().to(device)).squeeze(-1)
-
             with torch.no_grad(): # No gradient for the advantage calculation
+                returns_flat = torch.tensor(returns_flat).float().to(device)
                 advantages = returns_flat - value # Calculate advantage
 
             # Calculate actor and critic loss
@@ -319,24 +318,29 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
                 
                 # Flatten list of episodic returns and calculate min, max and mean
                 episode_returns_flat = [reward for worker in episode_returns for reward in worker]
-                if episode_returns_flat:
-                    min_log_returns.append(min(episode_returns_flat))
-                    max_log_returns.append(max(episode_returns_flat))
-                    
-                    avg_return = np.mean(episode_returns_flat) # The value here will be averaged over all seeds 
-                    mean_log_returns.append(avg_return)
-                    
-                    train_loss_actor_history.append(actor_loss.item())
-                    train_loss_critic_history.append(critic_loss.item())
+                if not episode_returns_flat: # if no worker finished an episode we pick the last episode min, max and mean
+                    min_log  = min_log_returns[-1]
+                    max_log = max_log_returns[-1]
+                    mean_log = mean_log_returns[-1]
+                else:
+                    min_log = min(episode_returns_flat)
+                    max_log = max(episode_returns_flat)
+                    mean_log = np.mean(episode_returns_flat) # The value here will be averaged over all seeds later on
+                    episode_returns = [[] for _ in range(K)] # Reset episodic returns
+
+                min_log_returns.append(min_log)
+                max_log_returns.append(max_log)
+                mean_log_returns.append(mean_log)
+                train_loss_actor_history.append(actor_loss.item())
+                train_loss_critic_history.append(critic_loss.item())
                     #if avg_returns:
                     #train_return_history.extend(avg_log(episode_returns))
 
-                    # Print logging information
-                    print(f"Step {step}: Average episodic return = {avg_return:.2f}")
-                    print(f"Step {step}: Critic loss = {critic_loss.item():.7f}")
-                    print(f"Step {step}: Actor loss = {actor_loss.item():.7f}")
-                
-                    episode_returns = [[] for _ in range(K)] # Reset episodic returns
+                # Print logging information
+                print(f"Step {step}: Average episodic return = {mean_log:.2f}")
+                print(f"Step {step}: Critic loss = {critic_loss.item():.7f}")
+                print(f"Step {step}: Actor loss = {actor_loss.item():.7f}")
+            
 
             # Evaluation
             if step % (eval_interval) == 0 and step > 0:
@@ -425,8 +429,7 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
     #plot_result(train_loss_critic_history_all, 'Time Step', 'Loss', 'Loss of Critic During Training', range_step =log_interval)
     #plot_result(train_loss_actor_history_all, 'Time Step', 'Loss', 'Loss of Actor During Training', range_step =log_interval)
 
-    dict_list = {#"value_funcs_20_100_500" : value_funcs_20_100_500, 
-                "value_trajectories_all": value_trajectories_all,
+    dict_list = {"value_trajectories_all": value_trajectories_all,
                 "mean_log_returns_all": mean_log_returns_all,
                 "min_log_returns_all": min_log_returns_all,
                 "max_log_returns_all": max_log_returns_all, 
