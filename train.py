@@ -209,13 +209,13 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
     eval_return_history_all = [] # Eval return history for all seeds: [[], [], []]
     train_loss_actor_history_all = [] # Actor loss history for all seeds: [[], [], []]
     train_loss_critic_history_all = [] # Critic loss history for all seeds: [[], [], []]
-    value_trajectories_all = []  # Value function trajectories for all seeds: [[], [], []]
+    value_trajectories_mean_all = []  # Value function trajectories for all seeds: [[], [], []]
     min_log_returns_all = [] # Min return at each log interval for all seeds: [[], [], []]
     mean_log_returns_all = [] # Mean return at each log interval for all seeds: [[], [], []]
     max_log_returns_all = []  # Max return at each log interval for all seeds: [[], [], []]
     log_interval = (log_interval // (K*n)) * K*n # Adjust log_interval to be divisible by K*n
     eval_interval = (eval_interval // (K*n)) * K*n # Adjust eval_interval to be divisible by K*n
-    #value_funcs_20_100_500 = [] # REMOVE
+    value_funcs_20_100_500 = [] # REMOVE
     
     for seed in seeds: # Loop over all seeds
         min_log_returns = [] # Min return at each log interval for current seed
@@ -255,7 +255,7 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
 
         train_loss_actor_history = [] # Actor loss history for current seed
         train_loss_critic_history = [] # Critic loss history for current seed
-        value_trajectories = [] # Value function trajectories for current seed
+        value_trajectories_mean = [] # Value function trajectories for current seed
 
         while step <= max_steps: # Loop over steps
             # advantages = [] REMOVE
@@ -349,9 +349,9 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
                 trajectory_states = [] # List to store states for value function trajectory
                 trajectory_values = [] # List to store values for value function trajectory
                 
-                #first = step == eval_interval
-                #middle = step == eval_interval*5
-                #last = step + eval_interval == max_steps # REMOVE
+                first = step == eval_interval
+                middle = step == eval_interval* (max_steps // (2*eval_interval))
+                last = step + 2*eval_interval > max_steps # Save two just in case
                 for i in range(num_eval_episodes): # Loop over evaluation episodes
                     state, _ = eval_env.reset(seed=seed)
                     
@@ -392,11 +392,11 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
                 
                 
                 plot_result(trajectory_values, 'Time Step', 'Value Function', 'Value Function on Sampled Trajectory')
-                #if (first or middle) and seed == seeds[0]:
-                #    value_funcs_20_100_500.append(trajectory_values)
+                if (first or middle or last) and seed == seeds[0]:
+                    value_funcs_20_100_500.append(trajectory_values)
                     
                     
-                value_trajectories.append(np.mean(trajectory_values))
+                value_trajectories_mean.append(np.mean(trajectory_values))
                 avg_eval_return = np.mean(eval_returns)
                 eval_return_history.append(avg_eval_return)
                 
@@ -404,7 +404,7 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
 
             step += K*n
         #value_funcs_20_100_500.append(value_trajectories) # REMOVE
-        value_trajectories_all.append(value_trajectories)
+        value_trajectories_mean_all.append(value_trajectories_mean)
         #train_return_history_all.append(train_return_history) # REMOVE
         eval_return_history_all.append(eval_return_history)
         train_loss_actor_history_all.append(train_loss_actor_history)
@@ -429,7 +429,8 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
     #plot_result(train_loss_critic_history_all, 'Time Step', 'Loss', 'Loss of Critic During Training', range_step =log_interval)
     #plot_result(train_loss_actor_history_all, 'Time Step', 'Loss', 'Loss of Actor During Training', range_step =log_interval)
 
-    dict_list = {"value_trajectories_all": value_trajectories_all,
+    dict_list = {"value_funcs_20_100_500": value_funcs_20_100_500,
+                "value_trajectories_mean_all": value_trajectories_mean_all,
                 "mean_log_returns_all": mean_log_returns_all,
                 "min_log_returns_all": min_log_returns_all,
                 "max_log_returns_all": max_log_returns_all, 
