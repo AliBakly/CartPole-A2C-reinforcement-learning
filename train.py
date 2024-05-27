@@ -2,10 +2,8 @@ import torch
 import torch.nn as nn
 import gymnasium as gym
 import numpy as np
-import math
 import matplotlib.pyplot as plt
 from gymnasium.wrappers import RecordVideo
-import time as time
 
 class Actor(nn.Module):
     """
@@ -23,7 +21,7 @@ class Actor(nn.Module):
         self.fc1 = nn.Linear(input_size, hidden_size)
         self.fc2 = nn.Linear(hidden_size, hidden_size)
         self.fc3 = nn.Linear(hidden_size, output_size)
-        self.activation = nn.Tanh() # torch.tanh alternativt
+        self.activation = nn.Tanh() 
         if continous:
             self.fc_log_std = nn.Parameter(torch.zeros(output_size))
         else:
@@ -146,9 +144,23 @@ def update_params(optimizer, loss):
         loss.backward()
         optimizer.step()
         
-# Plotting function MIGHT REMOVE !!!
 def plot_result(return_history, xlabel, ylabel, title, range_step = 1, min_returns_all = None, max_returns_all = None):
+    """
+    Plot the training or evaluation results with optional min and max return ranges.
 
+    Args:
+        return_history (list): A list of returns or a list of lists of returns, representing the return history.
+        xlabel (str): Label for the x-axis.
+        ylabel (str): Label for the y-axis.
+        title (str): Title of the plot.
+        range_step (int, optional): Step size for the x-axis range. Default is 1.
+        min_returns_all (list, optional): List of minimum returns for each interval, used for filling the area between min and max returns. Default is None.
+        max_returns_all (list, optional): List of maximum returns for each interval, used for filling the area between min and max returns. Default is None.
+
+    Returns:
+        None: The function displays the plot.
+    """
+    
     plt.figure(figsize=(8, 6))
     if min_returns_all is not None and max_returns_all is not None:
         plt.plot(range(range_step,range_step*len(return_history) + range_step, range_step), return_history, label='Mean')
@@ -174,7 +186,7 @@ def plot_result(return_history, xlabel, ylabel, title, range_step = 1, min_retur
     plt.title(title)
     plt.show()
 
-# Set hyperparameters
+
 def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, eval_interval,
           num_eval_episodes, max_steps, prob_mask, device = "cpu", seeds = [69], record_video = None):
     
@@ -201,7 +213,6 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
     Returns:
         dict: Dictionary containing training and evaluation results.
     """
-    #train_return_history_all = [] # REMOVE
     eval_return_history_all = [] # Eval return history for all seeds: [[], [], []]
     train_loss_actor_history_all = [] # Actor loss history for all seeds: [[], [], []]
     train_loss_critic_history_all = [] # Critic loss history for all seeds: [[], [], []]
@@ -211,7 +222,7 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
     max_log_returns_all = []  # Max return at each log interval for all seeds: [[], [], []]
     log_interval = (log_interval // (K*n)) * K*n # Adjust log_interval to be divisible by K*n
     eval_interval = (eval_interval // (K*n)) * K*n # Adjust eval_interval to be divisible by K*n
-    value_funcs_20_100_500 = [] # REMOVE
+    value_funcs_20_100_500 = [] # Value function trajectories for steps 20k, 100k and 500k
     
     for seed in seeds: # Loop over all seeds
         min_log_returns = [] # Min return at each log interval for current seed
@@ -239,25 +250,20 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
         actor_optimizer = torch.optim.Adam(actor.parameters(), lr=lr_actor)
         critic_optimizer = torch.optim.Adam(critic.parameters(), lr=lr_critic)
 
-        #
         episode_returns = [[] for _ in range(K)] # List of lists to store episodic returns for each worker (only last 1k steps)
 
         step = 0 # Step counter
         worker_state = [worker_env.reset(seed=seed)[0] for worker_env in worker_envs] # Initial state for each worker
         rewards = np.zeros(K) # Reward accumulator for each worker, reset when an episode ends
 
-        #train_return_history = [] # REMOVE
         eval_return_history = []
 
         train_loss_actor_history = [] # Actor loss history for current seed
         train_loss_critic_history = [] # Critic loss history for current seed
         value_trajectories_mean = [] # Value function trajectories for current seed
         
-        t = 0
-        t1 = time.time()
         while step <= max_steps: # Loop over steps
             
-            # advantages = [] REMOVE
             returns = [[] for _ in range(K)] # R-values for each worker
             
             # Two lists below are of form [ [[s1, s2], [s1, s2, s3, s4]],  [[s1, s2, s3, s4, s5, s6]]] for K = 2, n = 6
@@ -313,7 +319,6 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
 
             # Logging
             if step % (log_interval) == 0 and step > 0:
-                #avg_returns = [np.mean(returns) for returns in episode_returns if len(returns) > 0]
                 
                 # Flatten list of episodic returns and calculate min, max and mean
                 episode_returns_flat = [reward for worker in episode_returns for reward in worker]
@@ -332,8 +337,6 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
                 mean_log_returns.append(mean_log)
                 train_loss_actor_history.append(actor_loss.item())
                 train_loss_critic_history.append(critic_loss.item())
-                    #if avg_returns:
-                    #train_return_history.extend(avg_log(episode_returns))
 
                 # Print logging information
                 print(f"Step {step}: Average episodic return = {mean_log:.2f}")
@@ -403,11 +406,8 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
 
             
             step += K*n
-        t2 = time.time()
-        print(t2-t1)
-        #value_funcs_20_100_500.append(value_trajectories) # REMOVE
+
         value_trajectories_mean_all.append(value_trajectories_mean)
-        #train_return_history_all.append(train_return_history) # REMOVE
         eval_return_history_all.append(eval_return_history)
         train_loss_actor_history_all.append(train_loss_actor_history)
         train_loss_critic_history_all.append(train_loss_critic_history)    
@@ -425,7 +425,6 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
     max_log_returns_all = np.max(np.array(max_log_returns_all), axis=0).tolist()
     
     plot_result(value_trajectories_mean_all, 'Time Step', 'Value Function', 'Mean Over Value Function Trajectories', range_step= eval_interval)
-    #plot_result(train_return_history_all, 'Episode', 'Average Return', 'Return During Training')
     plot_result(mean_log_returns_all, 'Episode', 'Average Return', 'Return During Training', min_returns_all = min_log_returns_all, max_returns_all = max_log_returns_all, range_step = log_interval)
     plot_result(eval_return_history_all, 'Time Step', 'Average Return', 'Return During Evaluation', range_step =eval_interval)
     plot_result(train_loss_critic_history_all, 'Time Step', 'Loss', 'Loss of Critic During Training', range_step =log_interval)
@@ -441,15 +440,3 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
                 "train_loss_actor_history_all": train_loss_actor_history_all}
 
     return dict_list
-
-### Testing
-
-def avg_log(arr): # arr = [[x11 x12 x13 x14], [x21 x22], [x31 x32 x33 ]...]
-    max_len = max(len(lst) for lst in arr)
-    avg_list = []
-    for i in range(max_len):
-        col = [lst[i] for lst in arr if i < len(lst)]
-        avg_list.append(sum(col) / len(col))
-    return avg_list
-
-# [m1 m2 m3 m4]    m
