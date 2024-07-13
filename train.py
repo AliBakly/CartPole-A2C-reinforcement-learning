@@ -253,7 +253,7 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
         episode_returns = [[] for _ in range(K)] # List of lists to store episodic returns for each worker (only last 1k steps)
 
         step = 0 # Step counter
-        worker_state = [worker_env.reset(seed=seed)[0] for worker_env in worker_envs] # Initial state for each worker
+        worker_state = [worker_env.reset(seed=seed+i)[0] for i, worker_env in enumerate(worker_envs)] # Initial state for each worker
         rewards = np.zeros(K) # Reward accumulator for each worker, reset when an episode ends
 
         eval_return_history = []
@@ -387,7 +387,8 @@ def train(lr_actor, lr_critic, gamma, K, n, env_name, continous, log_interval, e
                         
                         if i == 0 : # Only store states and values for the first evaluation episode (arbitrary)
                             trajectory_states.append(state)
-                            value = critic(torch.tensor(state, dtype=torch.float32).to(device)).item()
+                            value = critic(torch.tensor(state, dtype=torch.float32).to(device))
+                            print(value.requires_grad)
                             trajectory_values.append(value)
                             
                     eval_returns.append(episode_return)
